@@ -1,62 +1,54 @@
 package handlers
 
 import (
+	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
+	"github.com/gorilla/mux"
 	"github.com/tochidoh/microservices/product_api/data"
 )
 
-// struct for handler, not actual products
+// KeyProduct is a key used for Product object in context
+type KeyProduct struct{}
+
+// Products handler for getting and updating products
 type Products struct {
-	l *log.Logger
+	logger     *log.Logger
+	validation *data.Validation
 }
 
-// constructor creates products handler instance => logger is passed from main
-func NewProducts(l *log.Logger) *Products {
-	return &Products{l}
+// NewProducts returns a new products handler with given logger
+func NewProducts(logger *log.Logger, validation *data.Validation) *Products {
+	return &Products{logger, validation}
 }
 
-// handler method controls all logic
-func (p *Products) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		p.getProducts(rw, r)
-		return
-	}
+// ErrInvalidProductPath is an error message when product path is not valid
+var ErrInvalidProductPath = fmt.Errorf("invalid path, path should be /products/[id]")
 
-	if r.Method == http.MethodPost {
-		p.addProduct(rw, r)
-		return
-	}
-
-	rw.WriteHeader(http.StatusMethodNotAllowed)
+// GenericError is a generic error message returned by a server
+type GenericError struct {
+	Message string `json:"message"`
 }
 
-// "service" method that gets data, would realistically be a database call
-func (p *Products) getProducts(rw http.ResponseWriter, r *http.Request) {
-	p.l.Println("handle get products")
+// ValidationError is a collection of validaiton error messages
+type ValidationError struct {
+	Messages []string `json:"messages"`
+}
 
-	lp := data.GetProducts()
+// getProductId returns the product ID from the URL
+// panics if cannot convert id into an integer
+// this should not happen bc router ensures it's a valid number
+func getProductId(r *http.Request) int {
+	// parse product id from url
+	vars := mux.Vars(r)
 
-	err := lp.ToJSON(rw) // same as marshal but writes to response
+	// convert id into integer
+	id, err := strconv.Atoi(vars["id"])
 	if err != nil {
-		http.Error(rw, "unable to marshal json", http.StatusInternalServerError)
-	}
-}
-
-func (p *Products) addProduct(rw http.ResponseWriter, r *http.Request) {
-	p.l.Println("triggering add product")
-
-	// now need to convert json body to normal product struct
-	prod := &data.Product{}
-
-	err := prod.FromJSON(r.Body) // request body is a io reader
-	if err != nil {
-		http.Error(rw, "unable to unmarshal json", http.StatusBadRequest)
+		panic(err)
 	}
 
-	p.l.Printf("product: %v\n", prod)
+	return id
 }
-
-// encode forms json from struct
-// decode forms struct from json

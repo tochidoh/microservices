@@ -8,50 +8,75 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/go-openapi/runtime/middleware"
+	"github.com/gorilla/mux"
+	"github.com/tochidoh/microservices/product_api/data"
 	"github.com/tochidoh/microservices/product_api/handlers"
 )
 
 func main() {
-	l := log.New(os.Stdout, "products_api ", log.LstdFlags)
+	logger := log.New(os.Stdout, "product_api", log.LstdFlags)
+	validation := data.NewValidation()
 
 	// create handlers
-	ph := handlers.NewProducts(l) // from separate handler package that needs to be imported
+	productHandler := handlers.NewProducts(logger, validation)
 
-	// serve mux
-	sm := http.NewServeMux()
-	sm.Handle("/", ph) // default paths will be handled by the product handler
+	// create new serve mux
+	serveMux := mux.NewRouter()
 
-	// create a server
-	s := http.Server{
-		Addr:         "localhost:8080",
-		Handler:      sm, // serve mux is default handler
-		ErrorLog:     l,
+	getRequest := serveMux.Methods(http.MethodGet).Subrouter()
+	getRequest.HandleFunc("/products", productHandler.ListAll)
+	getRequest.HandleFunc("/products/{id:[0-9]+}", productHandler.ListSingle)
+
+	putRequest := serveMux.Methods(http.MethodPut).Subrouter()
+	putRequest.HandleFunc("/products", productHandler.Update)
+	putRequest.Use(productHandler.MiddlewareValidateProduct)
+
+	postRequest := serveMux.Methods(http.MethodPost).Subrouter()
+	postRequest.HandleFunc("/products", productHandler.Create)
+	postRequest.Use(productHandler.MiddlewareValidateProduct)
+
+	deleteRequest := serveMux.Methods(http.MethodDelete).Subrouter()
+	deleteRequest.HandleFunc("/products/{id:[0-9]+}", productHandler.Delete)
+
+	// handler for documentation
+	opts := middleware.RedocOpts{SpecURL: "/swagger.yaml"}
+	sh := middleware.Redoc(opts, nil)
+
+	getRequest.Handle("/docs", sh)
+	getRequest.Handle("/swagger.yaml", http.FileServer(http.Dir("./")))
+
+	// create new server
+	server := http.Server{
+		Addr:         "localhost:9090",
+		Handler:      serveMux,
+		ErrorLog:     logger,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
 
-	// go routine to start server separate thread
+	// start server
 	go func() {
-		l.Println("starting server on port 8080")
+		logger.Println("starting server on port 9090")
 
-		err := s.ListenAndServe() // should block unless something bad happens
+		err := server.ListenAndServe()
 		if err != nil {
-			l.Printf("error starting server: %s\n", err)
-			os.Exit(1) // 1 means error exit
+			logger.Printf("error starting server: %s\n", err)
+			os.Exit(1)
 		}
 	}()
 
-	// graceful shutdown
-	c := make(chan os.Signal, 1)   // a channel of size 1 that contains os signal types
-	signal.Notify(c, os.Interrupt) // pushes signal to chan
-	signal.Notify(c, os.Kill)
+	// trap sigterm or interrupt and gracefully shutdown server
+	channel := make(chan os.Signal, 1)
+	signal.Notify(channel, os.Interrupt)
+	signal.Notify(channel, os.Kill)
 
-	// block until signal
-	sig := <-c
-	log.Println("got signal", sig)
+	// block until signal received
+	sig := <-channel
+	logger.Println("got signal:", sig)
 
-	// context
-	ctx, _ := context.WithTimeout(context.Background(), 30*time.Second) // cancel case?
-	s.Shutdown(ctx)                                                     // shutdown server
+	// gracefully shutdown server
+	ctx, _ := context.WithTimeout(context.Background(), 30*time.Second)
+	server.Shutdown(ctx)
 }
